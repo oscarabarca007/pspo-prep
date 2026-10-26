@@ -43,6 +43,8 @@
     school: 'M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82zM12 3 1 9l11 6 9-4.91V17h2V9L12 3z',
     play: 'M8 5v14l11-7z',
     download: 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',
+    upload: 'M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z',
+    copy: 'M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z',
     info: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z',
   };
   const icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name] || ''}"/></svg>`;
@@ -250,6 +252,15 @@
             <span class="body-small muted">${fmtDate(e.t)} · ${fmtDuration(e.dur)}</span></span>
             <span class="badge-chip ${e.passed ? 'success' : 'error'}">${e.passed ? 'Pass' : 'Below 85%'}</span>
           </div>`).join('')}</div>` : ''}
+
+        <h2 class="title-medium section-title">Sync between devices</h2>
+        <section class="card stack">
+          <p class="body-medium muted">Progress is saved only on this device. Export it here and import it on your other device. Imports are merged: the most recent answer to each question wins and exam histories are combined.</p>
+          <div class="row">
+            <button class="btn tonal" data-action="export">${icon('upload')}Export progress</button>
+            <button class="btn outlined" data-action="import">${icon('download')}Import progress</button>
+          </div>
+        </section>
 
         <div class="row" style="justify-content:center;margin-top:16px">
           <button class="btn text" data-action="reset">${icon('delete')}Reset progress</button>
@@ -732,8 +743,108 @@
       </div>`;
   }
 
+  // ---------- Sync (export / import) ----------
+  const CODE_PREFIX = 'PSPO1:';
+  const exportPayload = () => ({ app: 'pspo-prep', v: 1, t: Date.now(), answers: state.answers, studied: state.studied, exams: state.exams });
+  const encodeCode = obj => CODE_PREFIX + btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+
+  function decodeBackup(text) {
+    const raw = text.trim();
+    const json = raw.startsWith(CODE_PREFIX) ? decodeURIComponent(escape(atob(raw.slice(CODE_PREFIX.length).replace(/\s/g, '')))) : raw;
+    const d = JSON.parse(json);
+    if (!d || d.app !== 'pspo-prep' || typeof d.answers !== 'object') throw new Error('Not a PSPO Prep backup');
+    return d;
+  }
+
+  function mergeProgress(d) {
+    let updated = 0, added = 0;
+    for (const [id, a] of Object.entries(d.answers || {})) {
+      if (!QMAP[id] || !a || typeof a.n !== 'number' || typeof a.t !== 'number') continue;
+      const cur = state.answers[id];
+      if (!cur || a.t > (cur.t || 0)) { state.answers[id] = { n: a.n, c: a.c || 0, last: !!a.last, t: a.t }; updated++; }
+    }
+    for (const [id, t] of Object.entries(d.studied || {})) if (TOPIC[id] && !state.studied[id]) state.studied[id] = t;
+    const have = new Set(state.exams.map(e => e.t));
+    for (const e of d.exams || []) {
+      if (e && typeof e.t === 'number' && typeof e.pct === 'number' && !have.has(e.t)) { state.exams.push(e); have.add(e.t); added++; }
+    }
+    state.exams.sort((a, b) => a.t - b.t);
+    save();
+    return { updated, added };
+  }
+
+  function showExport() {
+    const answered = Object.keys(state.answers).length;
+    openDialog(`<form method="dialog" class="dialog-body">
+      <h2 class="headline-small">Export progress</h2>
+      <p class="body-medium muted">${plural(answered, 'answered question')}, ${plural(state.exams.length, 'exam')} and ${plural(Object.keys(state.studied).length, 'studied topic')}. Save the file or copy the code, then choose <strong>Import progress</strong> on your other device.</p>
+      <textarea class="code-box" id="exportCode" readonly aria-label="Backup code">${esc(encodeCode(exportPayload()))}</textarea>
+      <div class="dialog-actions">
+        <button class="btn text" value="close">Close</button>
+        <button class="btn outlined" type="button" data-action="export-file">${icon('download')}Save file</button>
+        <button class="btn filled" type="button" data-action="export-copy">${icon('copy')}Copy code</button>
+      </div></form>`);
+  }
+
+  async function exportCopy() {
+    const box = $('#exportCode');
+    try { await navigator.clipboard.writeText(box.value); }
+    catch { box.select(); document.execCommand('copy'); }
+    snackbar('Code copied. Paste it into Import progress on your other device.');
+  }
+
+  async function exportFile() {
+    const name = `pspo-prep-progress-${new Date().toISOString().slice(0, 10)}.json`;
+    const blob = new Blob([JSON.stringify(exportPayload())], { type: 'application/json' });
+    const file = new File([blob], name, { type: 'application/json' });
+    if (matchMedia('(pointer: coarse)').matches && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'PSPO Prep progress' }); return; }
+      catch (e) { if (e.name === 'AbortError') return; }
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    snackbar(`Saved ${name}`);
+  }
+
+  function showImport() {
+    openDialog(`<form method="dialog" class="dialog-body">
+      <h2 class="headline-small">Import progress</h2>
+      <p class="body-medium muted">Choose a backup file or paste a code from your other device. It is merged with the progress on this device.</p>
+      <label class="btn outlined" style="align-self:flex-start">${icon('upload')}Choose file
+        <input type="file" id="importFile" accept=".json,application/json,text/plain" hidden></label>
+      <textarea class="code-box" id="importText" placeholder="…or paste the code here" aria-label="Backup code"></textarea>
+      <p class="body-small bad-text" id="importError" hidden></p>
+      <div class="dialog-actions">
+        <button class="btn text" value="cancel">Cancel</button>
+        <button class="btn filled" type="button" data-action="import-apply">Import</button>
+      </div></form>`);
+  }
+
+  function applyImport(text) {
+    const err = $('#importError');
+    let d;
+    try { d = decodeBackup(text); }
+    catch {
+      err.textContent = 'That doesn’t look like a PSPO Prep backup. Check that the whole code was copied.';
+      err.hidden = false;
+      return;
+    }
+    const { updated, added } = mergeProgress(d);
+    $('#dialog').close();
+    route();
+    snackbar(`Imported: ${plural(updated, 'answer')} updated, ${plural(added, 'exam')} added.`);
+  }
+
   // ---------- Actions ----------
   const actions = {
+    export: showExport,
+    'export-copy': exportCopy,
+    'export-file': exportFile,
+    import: showImport,
+    'import-apply': () => applyImport($('#importText').value),
     'practice-mistakes': () => { const ids = shuffle(mistakeIds()); startPractice(ids); },
     'practice-topic': el => startPractice(shuffle(QUESTIONS.filter(q => q.topic === el.dataset.topic).map(q => q.id))),
     'toggle-studied': el => {
@@ -817,6 +928,7 @@
   });
   document.addEventListener('change', e => {
     if (e.target.matches('[data-action="explain-always"]')) { state.prefs.explainAlways = e.target.checked; save(); }
+    if (e.target.id === 'importFile' && e.target.files[0]) e.target.files[0].text().then(applyImport);
   });
   document.addEventListener('keydown', e => {
     if (!location.hash.startsWith('#/quiz') || !state.session || $('#dialog').open) return;

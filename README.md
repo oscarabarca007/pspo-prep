@@ -11,6 +11,7 @@ An installable study app (PWA) for the Scrum.org **Professional Scrum Product Ow
 - **Practice mode** – filter by topic, unanswered or past mistakes; every wrong answer is explained.
 - **Exam simulation** – 80 random questions, 60-minute timer, 85% pass mark, flag/overview grid and full review afterwards.
 - **Progress tracking** – mastery per topic, mistakes bank and exam history, stored locally on the device.
+- **Sync between devices** – export progress as a file or a copy-paste code and import it on another device; imports merge, keeping the most recent answer per question.
 - **Material Design 3** look with light/dark themes; works offline once installed.
 
 ## Install on your device

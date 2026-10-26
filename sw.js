@@ -1,5 +1,5 @@
 /* PSPO Prep service worker: precache the app shell, cache Google Fonts at runtime. */
-const VERSION = 'pspo-prep-v1';
+const VERSION = 'pspo-prep-v2';
 const FONT_CACHE = 'pspo-prep-fonts';
 const SHELL = [
   './',
